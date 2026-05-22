@@ -376,29 +376,46 @@ button:disabled {
   background: var(--bg-output);
   border: 1px solid var(--border);
   border-radius: 4px;
-  overflow: hidden;
+  /* container is the horizontal scroller; the wterm sizes to its content */
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
 }
 
-/* Let the wterm scroll horizontally so long rows don't blow up the cell. */
 .cell-output .wterm {
   border-radius: 0;
   box-shadow: none;
   background: transparent !important;
-  overflow: auto;
-  overscroll-behavior-inline: contain;
+  /* size to content; min-width: 100% keeps it full-bleed on wide screens */
+  display: inline-block;
+  vertical-align: top;
+  min-width: 100%;
+  overflow: visible !important;
+  cursor: default;
+  user-select: text;
 }
-.cell-output .wterm::-webkit-scrollbar {
+/* Read-only output: kill the typing cursor visual + focus outline. */
+.cell-output .term-cursor {
+  outline: none !important;
+  background: transparent !important;
+  color: inherit !important;
+}
+.cell-output .wterm:focus,
+.cell-output .wterm:focus-visible {
+  outline: none !important;
+}
+.cell-output::-webkit-scrollbar {
   height: 8px;
   width: 8px;
 }
-.cell-output .wterm::-webkit-scrollbar-thumb {
+.cell-output::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.15);
   border-radius: 4px;
 }
-.cell-output .wterm::-webkit-scrollbar-thumb:hover {
+.cell-output::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.25);
 }
-.cell-output .wterm::-webkit-scrollbar-track {
+.cell-output::-webkit-scrollbar-track {
   background: transparent;
 }
 

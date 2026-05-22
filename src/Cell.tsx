@@ -224,26 +224,12 @@ class TermSink {
 
 const MIN_ROWS = 3
 const MAX_ROWS = 24
+/** Fixed cols. Wider than typical mobile viewport on purpose so users get a
+ *  horizontal scrollbar instead of clipped lines. cell-output handles scroll. */
+const COLS = 100
 
-/** wterm cols clamped to viewport so output doesn't horizontally bleed. */
-function colsForViewport(): number {
-  if (typeof window === 'undefined') return 100
-  const w = window.innerWidth
-  if (w < 380) return 38
-  if (w < 640) return 52
-  if (w < 1024) return 90
-  return 120
-}
-
-function useViewportCols(): number {
-  const [cols, setCols] = useState(colsForViewport)
-  useEffect(() => {
-    const handler = () => setCols(colsForViewport())
-    window.addEventListener('resize', handler)
-    return () => window.removeEventListener('resize', handler)
-  }, [])
-  return cols
-}
+/** No-op input handler: wterm treats us as readonly, no echo on keypress. */
+const READONLY_ON_DATA = () => {}
 
 const lf = (s: string) => s.replace(/\n/g, '\r\n')
 
@@ -280,7 +266,6 @@ export function Cell({
   }, [cell.hasOutput, termReady])
 
   const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, lineCount))
-  const cols = useViewportCols()
 
   const cellType: CellType = cell.type
 
@@ -554,9 +539,12 @@ export function Cell({
                 <div className="cell-output">
                   <Terminal
                     ref={ref}
-                    cols={cols}
+                    cols={COLS}
                     rows={rows}
                     theme="monokai"
+                    onData={READONLY_ON_DATA}
+                    cursorBlink={false}
+                    tabIndex={-1}
                     onReady={() => setTermReady(true)}
                     style={{
                       borderRadius: 0,
