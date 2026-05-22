@@ -5,6 +5,9 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>js-terminal</title>
+    <!-- COEP/COOP shim: synthesizes crossOriginIsolated when host can't set
+         headers (GitHub Pages). No-op when headers are already present. -->
+    <script src="./coi-serviceworker.js"></script>
   </head>
   <body>
     <div id="root"></div>
