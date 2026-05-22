@@ -1,0 +1,47 @@
+{
+  "name": "js-terminal",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "postinstall": "node scripts/copy-wasm.mjs"
+  },
+  "dependencies": {
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-markdown": "^6.5.0",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/lint": "^6.9.6",
+    "@codemirror/theme-one-dark": "^6.1.3",
+    "@duckdb/duckdb-wasm": "^1.33.1-dev45.0",
+    "@swc/wasm-web": "^1.15.33",
+    "@typescript/vfs": "^1.6.4",
+    "@valtown/codemirror-ts": "^2.3.1",
+    "@wterm/dom": "^0.3.0",
+    "@wterm/react": "^0.3.0",
+    "apache-arrow": "^21.1.0",
+    "cbor-x": "^1.6.4",
+    "codemirror": "^6.0.2",
+    "comlink": "^4.4.2",
+    "quickjs-wasi-reactor": "^0.14.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.12"
+  }
+}
