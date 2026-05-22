@@ -219,17 +219,20 @@ export function Notebook() {
         </div>
         <div className="toolbar-actions">
           <button onClick={() => addCell()} title="Add cell at end">
-            <span className="tb-icon">+</span> Cell
+            <span className="tb-icon">+</span>
+            <span className="tb-label">Cell</span>
           </button>
           <button onClick={runAll} title="Run all cells top to bottom">
-            <span className="tb-icon play">▶</span> Run all
+            <span className="tb-icon play">▶</span>
+            <span className="tb-label">Run all</span>
           </button>
           <button
             onClick={restart}
             title="Destroy and re-create kernel"
             className="ghost"
           >
-            <span className="tb-icon">⟳</span> Restart
+            <span className="tb-icon">⟳</span>
+            <span className="tb-label">Restart</span>
           </button>
         </div>
       </header>

@@ -225,6 +225,26 @@ class TermSink {
 const MIN_ROWS = 3
 const MAX_ROWS = 24
 
+/** wterm cols clamped to viewport so output doesn't horizontally bleed. */
+function colsForViewport(): number {
+  if (typeof window === 'undefined') return 100
+  const w = window.innerWidth
+  if (w < 380) return 38
+  if (w < 640) return 52
+  if (w < 1024) return 90
+  return 120
+}
+
+function useViewportCols(): number {
+  const [cols, setCols] = useState(colsForViewport)
+  useEffect(() => {
+    const handler = () => setCols(colsForViewport())
+    window.addEventListener('resize', handler)
+    return () => window.removeEventListener('resize', handler)
+  }, [])
+  return cols
+}
+
 const lf = (s: string) => s.replace(/\n/g, '\r\n')
 
 export function Cell({
@@ -260,6 +280,7 @@ export function Cell({
   }, [cell.hasOutput, termReady])
 
   const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, lineCount))
+  const cols = useViewportCols()
 
   const cellType: CellType = cell.type
 
@@ -533,7 +554,7 @@ export function Cell({
                 <div className="cell-output">
                   <Terminal
                     ref={ref}
-                    cols={120}
+                    cols={cols}
                     rows={rows}
                     theme="monokai"
                     onReady={() => setTermReady(true)}
