@@ -250,6 +250,9 @@ export function Cell({
 
   const [termReady, setTermReady] = useState(false)
   const [rows, setRows] = useState(MIN_ROWS)
+  /** Bumped on every run so React force-remounts the wterm — guarantees a
+   *  fresh buffer + scrollback, no carry-over from the previous run. */
+  const [termEpoch, setTermEpoch] = useState(0)
   /** Promise of the most recent SWC compile. Drives the Suspense boundary —
    *  pending = spinner, rejected = error pane, resolved = iframe. */
   const [jsxPromise, setJsxPromise] = useState<Promise<string> | null>(null)
@@ -302,15 +305,22 @@ export function Cell({
     if (!cell.code.trim()) return
     onChange({ status: 'running', hasOutput: true })
 
-    // Wait for the wterm wasm to actually boot before piping kernel output in.
-    // On iOS Safari the WASM-init is slow enough that rAF-only fires before
-    // the terminal has bound its writer, so output gets dropped.
+    // Force a fresh wterm mount. The escape-sequence clear doesn't wipe
+    // scrollback, and the rows state persists across runs; remounting gives
+    // a clean buffer every time.
+    termReadyRef.current = false
+    setTermReady(false)
+    setRows(MIN_ROWS)
+    sinkRef.current.detach()
+    sinkRef.current.reset()
+    setTermEpoch((e) => e + 1)
+
+    // Wait for the new wterm to boot. On iOS Safari the WASM-init is slow
+    // enough that rAF-only fires before the terminal has bound its writer.
     const waitStart = Date.now()
     while (!termReadyRef.current && Date.now() - waitStart < 5000) {
       await new Promise<void>((r) => requestAnimationFrame(() => r()))
     }
-
-    sinkRef.current.reset()
 
     const push = (s: string) => sinkRef.current.push(lf(s) + '\r\n')
     const stdout: Sink = (line) => push(line)
@@ -582,6 +592,7 @@ export function Cell({
               <>
                 <div className="cell-output">
                   <Terminal
+                    key={termEpoch}
                     ref={ref}
                     cols={COLS}
                     rows={rows}
