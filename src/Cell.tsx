@@ -252,6 +252,16 @@ export function Cell({
   const [lineCount, setLineCount] = useState(0)
   const [jsxCompiled, setJsxCompiled] = useState<string | null>(null)
   const [jsxError, setJsxError] = useState<string | null>(null)
+  /** True while a run is in-flight; pre-allocates MAX_ROWS so streaming output
+   *  doesn't scroll off-screen before the row-count state has caught up. */
+  const [running, setRunning] = useState(false)
+
+  // Mirror termReady into a ref so the async run() can poll it without
+  // depending on stale closure captures (iOS Safari).
+  const termReadyRef = useRef(termReady)
+  useEffect(() => {
+    termReadyRef.current = termReady
+  }, [termReady])
 
   useEffect(() => {
     sinkRef.current.onLineCountChange = setLineCount
@@ -266,15 +276,27 @@ export function Cell({
     return () => sinkRef.current.detach()
   }, [cell.hasOutput, termReady])
 
-  const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, lineCount))
+  // While running, hand the wterm a full-height buffer so streamed lines have
+  // somewhere to land. When idle, settle to whatever fits the content.
+  const rows = running
+    ? MAX_ROWS
+    : Math.min(MAX_ROWS, Math.max(MIN_ROWS, lineCount))
 
   const cellType: CellType = cell.type
 
   const run = useCallback(async () => {
     if (!cell.code.trim()) return
     onChange({ status: 'running', hasOutput: true })
+    setRunning(true)
 
-    // Let the terminal mount if this is the first run
+    // Wait for the wterm wasm to actually be ready, not just one frame. On
+    // iOS Safari the WASM-init is slow enough that rAF-only fires before the
+    // terminal has bound its writer, so output gets dropped.
+    const waitStart = Date.now()
+    while (!termReadyRef.current && Date.now() - waitStart < 5000) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()))
+    }
+    // Yield one more frame so the rows=MAX_ROWS state lands before output.
     await new Promise<void>((r) => requestAnimationFrame(() => r()))
 
     sinkRef.current.reset()
@@ -431,6 +453,8 @@ export function Cell({
         durationMs: performance.now() - start,
         errorMessage: msg,
       })
+    } finally {
+      setRunning(false)
     }
   }, [cell.code, cellType, onChange])
 
