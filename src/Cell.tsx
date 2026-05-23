@@ -6,7 +6,7 @@ import { CELL_TYPES, type CellType } from './cellType'
 import { runSql } from './sqlRunner'
 import { compileJsx, isJsxReady } from './jsx'
 import { isDuckDBReady } from './duckdb'
-import { JsxOutput } from './JsxOutput'
+import { JsxBoundary } from './JsxBoundary'
 import { bus } from './bus'
 import { parsePolymath, type Block } from './polymath'
 import {
@@ -250,8 +250,9 @@ export function Cell({
 
   const [termReady, setTermReady] = useState(false)
   const [lineCount, setLineCount] = useState(0)
-  const [jsxCompiled, setJsxCompiled] = useState<string | null>(null)
-  const [jsxError, setJsxError] = useState<string | null>(null)
+  /** Promise of the most recent SWC compile. Drives the Suspense boundary —
+   *  pending = spinner, rejected = error pane, resolved = iframe. */
+  const [jsxPromise, setJsxPromise] = useState<Promise<string> | null>(null)
 
   /** Updated synchronously inside the Terminal's onReady so the run() loop
    *  can poll it without waiting for a useEffect commit (iOS Safari). */
@@ -362,9 +363,9 @@ export function Cell({
         }
       } else if (block.lang === 'jsx') {
         if (!isJsxReady()) dim('loading SWC wasm (~4 MB gzip)…')
-        const compiled = await compileJsx(block.body)
-        setJsxCompiled(compiled)
-        setJsxError(null)
+        const p = compileJsx(block.body)
+        setJsxPromise(p)
+        const compiled = await p
         push(`\x1b[2m· JSX compiled (${compiled.length} bytes) — rendering in iframe below\x1b[0m`)
       }
     }
@@ -378,7 +379,7 @@ export function Cell({
         if (blocks.length === 0) {
           push('\x1b[33m(no blocks — add ### sql / ### js / ### jsx headers)\x1b[0m')
         }
-        setJsxCompiled(null)
+        setJsxPromise(null)
         for (let i = 0; i < blocks.length; i++) {
           await runBlock(blocks[i], i, blocks.length)
         }
@@ -401,15 +402,15 @@ export function Cell({
           errorMessage: undefined,
         })
       } else if (type === 'jsx') {
-        setJsxError(null)
         if (!isJsxReady()) {
           sinkRef.current.push(
             '\x1b[2m· loading SWC wasm (~4 MB gzip)…\x1b[0m\r\n',
           )
         }
         try {
-          const compiled = await compileJsx(body)
-          setJsxCompiled(compiled)
+          const p = compileJsx(body)
+          setJsxPromise(p)
+          await p
           onChange({
             executionCount: kernel.bumpExecutionCount(),
             status: 'ok',
@@ -418,8 +419,8 @@ export function Cell({
           })
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err)
-          setJsxCompiled(null)
-          setJsxError(msg)
+          // jsxPromise stays set so the Suspense ErrorBoundary catches the
+          // rejected promise and renders the styled error pane.
           onChange({
             executionCount: kernel.bumpExecutionCount(),
             status: 'error',
@@ -556,7 +557,7 @@ export function Cell({
             <div className="io-label out-label">{outLabel}</div>
             {cellType === 'jsx' ? (
               <div className="cell-output">
-                <JsxOutput compiledCode={jsxCompiled} error={jsxError} />
+                <JsxBoundary promise={jsxPromise} />
               </div>
             ) : (
               <>
@@ -578,12 +579,9 @@ export function Cell({
                     }}
                   />
                 </div>
-                {cellType === 'polymath' && jsxCompiled && (
+                {cellType === 'polymath' && jsxPromise && (
                   <div className="cell-output" style={{ marginTop: 8 }}>
-                    <JsxOutput
-                      compiledCode={jsxCompiled}
-                      error={jsxError}
-                    />
+                    <JsxBoundary promise={jsxPromise} />
                   </div>
                 )}
               </>
