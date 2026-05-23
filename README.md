@@ -105,6 +105,97 @@ flowchart LR
 - **GitHub Pages + `coi-serviceworker`.** No backend. The service-worker shim synthesizes `COOP`/`COEP` client-side so `crossOriginIsolated` is true and `SharedArrayBuffer` works on a static host.
 - **CBOR for the text-only boundaries.** `BroadcastChannel.postMessage` already handles `BigInt`/`Date` via structured clone; CBOR is only used where we need to embed snapshots in iframe `srcDoc` or QuickJS evals (binary, lossless, BigInt-safe).
 
+### Run flow — click to pixel
+
+The canonical JS-cell path, every hop from a Run click to a paint:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Cell as Cell.tsx
+    participant Sink as TermSink
+    participant K as kernel.ts<br/>(main proxy)
+    participant Cmlk as Comlink RPC
+    participant KW as kernelWorker.ts<br/>(Web Worker)
+    participant QJS as QuickJS-WASI<br/>(wasm)
+    participant T as Terminal<br/>(@wterm/react)
+    participant W as WTerm bridge<br/>(@wterm/dom)
+    participant DOM as Cell DOM
+
+    User->>Cell: click Run (or Shift-Enter)
+    Cell->>Cell: onChange({status:'running', hasOutput:true})
+    Cell->>Cell: setTermEpoch(e+1) · setTermReady(false)
+    Cell->>Sink: detach() · reset()
+
+    Note over Cell,DOM: React re-renders with new key — old WTerm unmounts
+    Cell->>T: mount key=N (fresh instance)
+    T->>W: new WTerm(el, opts)
+    T->>W: wt.init() (wasm load — cached after 1st cell)
+    W-->>T: bridge ready
+    T-->>Cell: onReady() → termReadyRef.current = true
+
+    Cell->>Cell: poll termReadyRef (≤5 s)
+    Cell->>Sink: attach(write) · ensureRows(buffered)
+
+    Cell->>K: runCell(code, {stdout, stderr})
+    K->>K: ++executionCount → cellId = '<cell-N>'
+    K->>Cmlk: api.run(code, name,<br/>Comlink.proxy(stdout),<br/>Comlink.proxy(stderr))
+    Cmlk->>KW: postMessage RPC
+    KW->>QJS: ensure() — boot wasm + stdlib (cached)
+    KW->>QJS: q.eval(code, false, name)
+    KW->>QJS: q.runLoop()
+
+    loop per console.log / fwrite \n
+        QJS-->>KW: WASI fd_write → lineBuffered ConsoleStdout
+        KW-->>Cmlk: stdoutProxy(line) — postMessage back
+        Cmlk-->>Cell: stdout(line) callback fires
+        Cell->>Sink: push(line + '\r\n')
+        Sink->>Cell: onLineCountChange(n)
+        Cell->>T: handle.resize(COLS, target) — sync via ref
+        T->>W: wt.resize(cols, rows)
+        Sink->>T: write(s) (useTerminal.write)
+        T->>W: wt.write(s) → bridge.writeString
+        W->>W: schedule render (rAF)
+        W->>DOM: renderer paints dirty rows
+        DOM-->>User: pixel
+    end
+
+    QJS-->>KW: runLoop resolves
+    KW-->>Cmlk: { status:'ok', durationMs }
+    Cmlk-->>K: result
+    K-->>Cell: { count, result }
+    Cell->>Cell: onChange({status:'ok', executionCount, durationMs})
+```
+
+### Dispatch by cell type
+
+The branch at the top of `Cell.run()` — picks the path before the JS sequence above kicks in:
+
+```mermaid
+flowchart TD
+    Start([Cell.run]) --> Type{cell.type}
+    Type -->|js| JS[wrap with bus/fs shim<br/>→ kernel.runCell]
+    Type -->|sql| SQL[runSql → syncVfsToDuckDB<br/>→ conn.query<br/>→ format Arrow → push table to sink<br/>→ bus.send block.name, rows]
+    Type -->|jsx| JSX[compileJsx → setJsxPromise<br/>→ Suspense → iframe srcDoc<br/>→ React.createRoot.render App]
+    Type -->|polymath| Poly[parsePolymath → for each block]
+    Poly --> Block{block.lang}
+    Block --> JS
+    Block --> SQL
+    Block --> JSX
+    JS --> TTY[stdout streams to wterm<br/>per the sequence diagram]
+    SQL --> TTY
+    JSX --> Iframe[boots iframe · fetches esm.sh<br/>renders App into sandboxed DOM]
+    TTY --> Done([onChange status: ok / error])
+    Iframe --> Done
+```
+
+**Two non-obvious things in the flow above:**
+
+- **`__BUS:` / `__FS:` markers** travel back through the *same* stdout stream as normal output. The host-side `busStdout` sink in `Cell.run()` does prefix-detection on each line and routes those to `bus.send()` / `vfs.write()` instead of writing to the wterm. From QuickJS's perspective they're just `console.log`s; from the host's perspective they're side-channel mutations.
+
+- **The Comlink stdout proxy is per-call.** Every `runCell` creates two `Comlink.proxy(callback)` references and passes them as worker args. After the run resolves, those proxies become eligible for GC. Means: ~one postMessage per output line, but the proxy registration cost is per-run, not per-line.
+
 ## Quickstart
 
 ```bash
