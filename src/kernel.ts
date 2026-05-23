@@ -1,7 +1,6 @@
-import { loadQuickJS, type QuickJS } from 'quickjs-wasi-reactor'
-import { QUICKJS_STDLIB_SOURCE } from './quickjsStdlib'
-
-const WASM_URL = `${import.meta.env.BASE_URL}qjs-wasi.wasm`
+import * as Comlink from 'comlink'
+import KernelWorker from './kernelWorker?worker'
+import type { KernelWorkerApi, RunResult } from './kernelWorker'
 
 export type Sink = (line: string) => void
 
@@ -10,23 +9,21 @@ export interface CellSinks {
   stderr: Sink
 }
 
-export interface RunResult {
-  status: 'ok' | 'error'
-  durationMs: number
-  error?: string
-}
-
 export type KernelStatus = 'idle' | 'loading' | 'ready' | 'error' | 'busy'
 
 type Listener = (status: KernelStatus) => void
 
-const noopSink: Sink = () => {}
-
+/**
+ * Main-thread proxy for the QuickJS kernel that runs in a Web Worker.
+ * - Streams stdout/stderr via Comlink.proxy callbacks (one postMessage per line)
+ * - Execution counter lives here so JS / SQL / JSX cells share one sequence
+ * - restart() terminates the worker; next run spawns a fresh one
+ */
 class Kernel {
-  private qjs: QuickJS | null = null
-  private loadingPromise: Promise<QuickJS> | null = null
-  private activeStdout: Sink = noopSink
-  private activeStderr: Sink = noopSink
+  private worker: Worker | null = null
+  private api: Comlink.Remote<KernelWorkerApi> | null = null
+  private initPromise: Promise<void> | null = null
+
   private status: KernelStatus = 'idle'
   private listeners = new Set<Listener>()
   private chain: Promise<unknown> = Promise.resolve()
@@ -36,10 +33,8 @@ class Kernel {
     return this.status
   }
 
-  /** Shared execution counter used by all runners (JS, SQL, JSX). */
   bumpExecutionCount(): number {
-    this.executionCount += 1
-    return this.executionCount
+    return ++this.executionCount
   }
 
   peekExecutionCount(): number {
@@ -51,72 +46,70 @@ class Kernel {
     return () => this.listeners.delete(fn)
   }
 
-  private setStatus(next: KernelStatus) {
+  private setStatus(next: KernelStatus): void {
     if (this.status === next) return
     this.status = next
     for (const l of this.listeners) l(next)
   }
 
-  private async ensureLoaded(): Promise<QuickJS> {
-    if (this.qjs) return this.qjs
-    if (this.loadingPromise) return this.loadingPromise
-
-    this.setStatus('loading')
-    this.loadingPromise = (async () => {
-      const qjs = await loadQuickJS(WASM_URL, {
-        stdout: (line) => this.activeStdout(line),
-        stderr: (line) => this.activeStderr(line),
-      })
-      qjs.init(['qjs', '--std'])
-      // Seed browser-shaped Web APIs (TextEncoder/Decoder, btoa/atob, crypto).
-      // Pure JS polyfills, idempotent. Runs once per kernel lifetime.
-      qjs.eval(QUICKJS_STDLIB_SOURCE, false, '<stdlib>')
-      this.qjs = qjs
-      this.setStatus('ready')
-      return qjs
-    })()
-    try {
-      return await this.loadingPromise
-    } catch (err) {
-      this.setStatus('error')
-      this.loadingPromise = null
-      throw err
+  private getApi(): Comlink.Remote<KernelWorkerApi> {
+    if (!this.api) {
+      this.worker = new KernelWorker()
+      this.api = Comlink.wrap<KernelWorkerApi>(this.worker)
     }
+    return this.api
   }
 
-  /** Serialized cell execution. Returns the execution counter assigned and run result. */
-  runCell(code: string, sinks: CellSinks): Promise<{ count: number; result: RunResult }> {
-    const job = async () => {
-      const qjs = await this.ensureLoaded()
-      this.executionCount += 1
-      const count = this.executionCount
-      this.setStatus('busy')
-      this.activeStdout = sinks.stdout
-      this.activeStderr = sinks.stderr
+  private async ensure(): Promise<void> {
+    if (this.initPromise) return this.initPromise
+    this.setStatus('loading')
+    const a = this.getApi()
+    this.initPromise = a
+      .init()
+      .then(() => {
+        this.setStatus('ready')
+      })
+      .catch((err) => {
+        this.setStatus('error')
+        this.initPromise = null
+        throw err
+      })
+    return this.initPromise
+  }
 
-      const start = performance.now()
-      let result: RunResult
+  runCell(
+    code: string,
+    sinks: CellSinks,
+  ): Promise<{ count: number; result: RunResult }> {
+    const job = async () => {
+      await this.ensure()
+      const count = ++this.executionCount
+      this.setStatus('busy')
+      const a = this.getApi()
+      const stdoutProxy = Comlink.proxy(sinks.stdout)
+      const stderrProxy = Comlink.proxy(sinks.stderr)
       try {
-        // Plain top-level eval so `var` / function decls persist as globals
-        // across cells. `let` / `const` are block-scoped per eval per ES spec
-        // — use `globalThis.x = ...` for cross-cell state.
-        qjs.eval(code, false, `<cell-${count}>`)
-        await qjs.runLoop()
-        result = { status: 'ok', durationMs: performance.now() - start }
+        const result = await a.run(
+          code,
+          `<cell-${count}>`,
+          stdoutProxy,
+          stderrProxy,
+        )
+        return { count, result }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        sinks.stderr(msg)
-        result = {
-          status: 'error',
-          durationMs: performance.now() - start,
-          error: msg,
+        try {
+          sinks.stderr(msg)
+        } catch {
+          /* ignore */
+        }
+        return {
+          count,
+          result: { status: 'error', durationMs: 0, error: msg } as RunResult,
         }
       } finally {
-        this.activeStdout = noopSink
-        this.activeStderr = noopSink
         this.setStatus('ready')
       }
-      return { count, result }
     }
 
     const next = this.chain.then(job, job)
@@ -126,9 +119,16 @@ class Kernel {
 
   async restart(): Promise<void> {
     await this.chain.catch(() => {})
-    this.qjs?.destroy()
-    this.qjs = null
-    this.loadingPromise = null
+    if (this.worker) {
+      try {
+        this.worker.terminate()
+      } catch {
+        /* ignore */
+      }
+    }
+    this.worker = null
+    this.api = null
+    this.initPromise = null
     this.executionCount = 0
     this.setStatus('idle')
   }

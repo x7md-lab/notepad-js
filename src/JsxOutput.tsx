@@ -78,6 +78,10 @@ ${compilerErrorBlock}
   </div>
 </div>
 <script type="module">
+import * as __React from 'react'
+import { createRoot as __createRoot } from 'react-dom/client'
+import { decode as __cborDecode } from 'cbor-x'
+
 function __showError(msg) {
   const pre = document.createElement('pre')
   pre.className = '__err'
@@ -85,20 +89,10 @@ function __showError(msg) {
   const root = document.getElementById('root')
   if (root) root.innerHTML = ''
   document.body.insertBefore(pre, document.getElementById('root'))
+  try { parent.postMessage({ __jsxIframeReady: true, ok: false }, '*') } catch (_) {}
 }
-
 window.addEventListener('error', e => __showError(e.error || e.message))
 window.addEventListener('unhandledrejection', e => __showError(e.reason))
-
-let __React, __createRoot, __cborDecode
-try {
-  __React = await import('react')
-  ;({ createRoot: __createRoot } = await import('react-dom/client'))
-  ;({ decode: __cborDecode } = await import('cbor-x'))
-} catch (err) {
-  __showError(new Error('Failed to load runtime modules from esm.sh: ' + (err && err.message || err)))
-  throw err
-}
 
 function __b64ToBytes(b64) {
   const bin = atob(b64)
@@ -142,30 +136,21 @@ window.bus = {
 }
 
 // User code at module top level — its own \`import\` statements stay valid.
-let __userOk = true
-try {
 ${compiled}
+
+// Mount runs only if user-code execution above didn't throw.
+const __mount = document.getElementById('root')
+try {
+  if (typeof App === 'function') {
+    __mount.innerHTML = ''
+    __createRoot(__mount).render(__React.createElement(App))
+  } else {
+    __mount.innerHTML = '<div class="__hint">No App component defined. Try: <code>function App() { return &lt;h1&gt;hi&lt;/h1&gt; }</code></div>'
+  }
+  parent.postMessage({ __jsxIframeReady: true, ok: true }, '*')
 } catch (err) {
-  __userOk = false
   __showError(err)
 }
-
-if (__userOk) {
-  const __mount = document.getElementById('root')
-  try {
-    if (typeof App === 'function') {
-      __mount.innerHTML = ''
-      __createRoot(__mount).render(__React.createElement(App))
-    } else {
-      __mount.innerHTML = '<div class="__hint">No App component defined. Try: <code>function App() { return &lt;h1&gt;hi&lt;/h1&gt; }</code></div>'
-    }
-  } catch (err) {
-    __showError(err)
-  }
-}
-
-// Tell the parent we're done booting.
-try { parent.postMessage({ __jsxIframeReady: true }, '*') } catch (_) {}
 </script>
 </body>
 </html>`

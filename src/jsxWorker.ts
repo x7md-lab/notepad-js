@@ -1,18 +1,13 @@
 /// <reference lib="webworker" />
+import * as Comlink from 'comlink'
 import initSwc, { transform } from '@swc/wasm-web'
 
-let ready: Promise<unknown> | null = null
+let initPromise: Promise<unknown> | null = null
 
-interface Req {
-  id: number
-  code: string
-}
-
-self.onmessage = async (e: MessageEvent<Req>) => {
-  const { id, code } = e.data
-  if (!ready) ready = initSwc()
-  try {
-    await ready
+const api = {
+  async compile(code: string): Promise<string> {
+    if (!initPromise) initPromise = initSwc()
+    await initPromise
     const out = await transform(code, {
       filename: 'cell.jsx',
       jsc: {
@@ -23,17 +18,10 @@ self.onmessage = async (e: MessageEvent<Req>) => {
       isModule: true,
       module: { type: 'es6' },
     })
-    ;(self as unknown as DedicatedWorkerGlobalScope).postMessage({
-      id,
-      ok: true,
-      code: out.code,
-    })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    ;(self as unknown as DedicatedWorkerGlobalScope).postMessage({
-      id,
-      ok: false,
-      error: msg,
-    })
-  }
+    return out.code
+  },
 }
+
+export type JsxWorkerApi = typeof api
+
+Comlink.expose(api)
