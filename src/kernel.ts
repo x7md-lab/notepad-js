@@ -33,6 +33,13 @@ class Kernel {
     return this.status
   }
 
+  /** Fire-and-forget warmup: kicks off the wasm load + stdlib eval so the
+   *  first user-triggered run doesn't pay the cold-load cost. Safe to call
+   *  multiple times; subsequent calls return the cached init promise. */
+  warmup(): Promise<void> {
+    return this.ensure()
+  }
+
   bumpExecutionCount(): number {
     return ++this.executionCount
   }

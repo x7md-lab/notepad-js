@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Cell, type CellData } from './Cell'
 import { kernel } from './kernel'
+import { warmupJsx } from './jsx'
+import { warmupDuckDB } from './duckdb'
 import type { CellType } from './cellType'
 
 interface StarterCell {
@@ -145,6 +147,33 @@ export function Notebook() {
     STARTERS.map((s) => makeCell(s.code, s.type)),
   )
   const status = useKernelStatus()
+
+  // Pre-warm the wasms in the background so first-run latency drops to ~0.
+  // Always warm the QuickJS kernel; only warm DuckDB/SWC if the notebook
+  // actually has cells that need them (polymath may have any block type).
+  useEffect(() => {
+    kernel.warmup().catch((err) => {
+      console.warn('kernel warmup failed', err)
+    })
+    const needsDuckDB = cells.some(
+      (c) => c.type === 'sql' || c.type === 'polymath',
+    )
+    const needsSwc = cells.some(
+      (c) => c.type === 'jsx' || c.type === 'polymath',
+    )
+    if (needsDuckDB) {
+      warmupDuckDB().catch((err) => {
+        console.warn('duckdb warmup failed', err)
+      })
+    }
+    if (needsSwc) {
+      warmupJsx().catch((err) => {
+        console.warn('swc warmup failed', err)
+      })
+    }
+    // Only on mount — adding new cells doesn't retroactively trigger warmup.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const updateCell = useCallback((id: string, patch: Partial<CellData>) => {
     setCells((cs) => cs.map((c) => (c.id === id ? { ...c, ...patch } : c)))

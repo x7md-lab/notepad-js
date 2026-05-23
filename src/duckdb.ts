@@ -57,6 +57,11 @@ export async function getDuckDB(): Promise<duckdb.AsyncDuckDB> {
   return getDb()
 }
 
+/** Pre-load DuckDB wasm so the first SQL cell doesn't wait on cold start. */
+export async function warmupDuckDB(): Promise<void> {
+  await getDb()
+}
+
 export async function resetDuckDB(): Promise<void> {
   try {
     await conn?.close()

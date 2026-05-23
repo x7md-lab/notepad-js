@@ -249,7 +249,7 @@ export function Cell({
   writeRef.current = write
 
   const [termReady, setTermReady] = useState(false)
-  const [lineCount, setLineCount] = useState(0)
+  const [rows, setRows] = useState(MIN_ROWS)
   /** Promise of the most recent SWC compile. Drives the Suspense boundary —
    *  pending = spinner, rejected = error pane, resolved = iframe. */
   const [jsxPromise, setJsxPromise] = useState<Promise<string> | null>(null)
@@ -262,20 +262,39 @@ export function Cell({
     setTermReady(true)
   }, [])
 
+  /** Grow the wterm grid synchronously before each write. React state batching
+   *  was letting writes hit an undersized grid; overflow rows scrolled into
+   *  scrollback before the rows prop caught up, so the tail of long outputs
+   *  appeared truncated on a second run. */
+  const ensureRows = useCallback(
+    (n: number) => {
+      const target = Math.min(MAX_ROWS, Math.max(MIN_ROWS, n))
+      const handle = ref.current
+      const wt = handle?.instance
+      if (!handle || !wt) return
+      if (target > wt.rows) {
+        handle.resize(COLS, target)
+        setRows(target)
+      }
+    },
+    [ref],
+  )
+
   useEffect(() => {
-    sinkRef.current.onLineCountChange = setLineCount
+    sinkRef.current.onLineCountChange = ensureRows
     return () => {
       sinkRef.current.onLineCountChange = null
     }
-  }, [])
+  }, [ensureRows])
 
   useEffect(() => {
     if (!cell.hasOutput || !termReady) return
     sinkRef.current.attach((s) => writeRef.current(s))
+    // Any rows-worth of content that buffered before the terminal was ready
+    // still needs the grid sized to hold it.
+    ensureRows(sinkRef.current.lineCount)
     return () => sinkRef.current.detach()
-  }, [cell.hasOutput, termReady])
-
-  const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, lineCount))
+  }, [cell.hasOutput, termReady, ensureRows])
 
   const cellType: CellType = cell.type
 

@@ -35,3 +35,15 @@ export async function compileJsx(code: string): Promise<string> {
     throw err
   }
 }
+
+/** Pre-load the SWC wasm so the first JSX cell doesn't wait on cold start. */
+export async function warmupJsx(): Promise<void> {
+  const a = getApi()
+  try {
+    await a.warmup()
+    status = 'ready'
+  } catch (err) {
+    if (status !== 'ready') status = 'error'
+    throw err
+  }
+}

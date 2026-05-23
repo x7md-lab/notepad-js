@@ -5,6 +5,12 @@ import initSwc, { transform } from '@swc/wasm-web'
 let initPromise: Promise<unknown> | null = null
 
 const api = {
+  /** Kick off the SWC wasm load without compiling anything. */
+  async warmup(): Promise<void> {
+    if (!initPromise) initPromise = initSwc()
+    await initPromise
+  },
+
   async compile(code: string): Promise<string> {
     if (!initPromise) initPromise = initSwc()
     await initPromise
