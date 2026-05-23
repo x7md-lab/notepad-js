@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { bus } from './bus'
 
 interface Props {
@@ -31,7 +31,6 @@ const IMPORT_MAP = {
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
-  // Chunked to avoid call-stack issues on large buffers.
   let s = ''
   const chunk = 0x8000
   for (let i = 0; i < bytes.length; i += chunk) {
@@ -49,11 +48,9 @@ function buildSrcDoc(
   snapshotBytes: Uint8Array,
 ): string {
   const escapedError = (error ?? '').replace(/</g, '&lt;')
-  const errorBlock = error
+  const compilerErrorBlock = error
     ? `<pre class="__err">${escapedError}</pre>`
     : ''
-  // CBOR-encoded snapshot, embedded as base64. cbor-x preserves BigInt,
-  // Date, Map, Set, ArrayBuffer natively — no tagging needed.
   const snapBase64 = bytesToBase64(snapshotBytes)
   return `<!doctype html>
 <html lang="en">
@@ -65,19 +62,43 @@ ${JSON.stringify(IMPORT_MAP, null, 2)}
 <style>
   html, body { margin: 0; padding: 0; background: #1c1c1c; color: #e6e6e6; }
   body { font: 14px ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 12px; }
-  #root:empty::before { content: "Define a function called App to render. Example: function App() { return <h1>hi</h1> }"; color: #888; font-size: 12px; }
-  .__err { color: #f28b82; white-space: pre-wrap; font: 12px ui-monospace,Menlo,Consolas,monospace; padding: 12px; margin: 0; }
+  .__err { color: #f28b82; white-space: pre-wrap; font: 12px ui-monospace,Menlo,Consolas,monospace; padding: 12px; margin: 0; background: rgba(242,139,130,0.08); border: 1px solid rgba(242,139,130,0.35); border-radius: 6px; }
+  .__loader { color: #9e9e9e; font-size: 12px; padding: 14px 12px; display: flex; gap: 10px; align-items: center; }
+  .__loader .__spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); border-top-color: #689af2; animation: __spin 0.7s linear infinite; }
+  @keyframes __spin { to { transform: rotate(360deg); } }
+  .__hint { color: #666; font-size: 11px; padding: 14px 12px; }
 </style>
 </head>
 <body>
-${errorBlock}
-<div id="root"></div>
+${compilerErrorBlock}
+<div id="root">
+  <div class="__loader" id="__bootLoader">
+    <span class="__spin" aria-hidden="true"></span>
+    <span>Loading sandbox: react, react-dom, recharts (esm.sh)…</span>
+  </div>
+</div>
 <script type="module">
-import * as __React from 'react'
-import { createRoot as __createRoot } from 'react-dom/client'
+function __showError(msg) {
+  const pre = document.createElement('pre')
+  pre.className = '__err'
+  pre.textContent = String(msg && msg.stack ? msg.stack : msg)
+  const root = document.getElementById('root')
+  if (root) root.innerHTML = ''
+  document.body.insertBefore(pre, document.getElementById('root'))
+}
 
-// ---- Bus shim (mirrors main-thread bus via BroadcastChannel) ----
-import { decode as __cborDecode } from 'cbor-x'
+window.addEventListener('error', e => __showError(e.error || e.message))
+window.addEventListener('unhandledrejection', e => __showError(e.reason))
+
+let __React, __createRoot, __cborDecode
+try {
+  __React = await import('react')
+  ;({ createRoot: __createRoot } = await import('react-dom/client'))
+  ;({ decode: __cborDecode } = await import('cbor-x'))
+} catch (err) {
+  __showError(new Error('Failed to load runtime modules from esm.sh: ' + (err && err.message || err)))
+  throw err
+}
 
 function __b64ToBytes(b64) {
   const bin = atob(b64)
@@ -120,64 +141,129 @@ window.bus = {
   },
 }
 
-window.addEventListener('error', e => {
-  const pre = document.createElement('pre')
-  pre.className = '__err'
-  pre.textContent = String(e.error && e.error.stack ? e.error.stack : (e.message || e.error))
-  document.body.insertBefore(pre, document.getElementById('root'))
-})
-window.addEventListener('unhandledrejection', e => {
-  const pre = document.createElement('pre')
-  pre.className = '__err'
-  pre.textContent = String(e.reason && e.reason.stack ? e.reason.stack : e.reason)
-  document.body.insertBefore(pre, document.getElementById('root'))
-})
-
 // User code at module top level — its own \`import\` statements stay valid.
-${compiled}
-
-// Mount after user code has executed (top-level await in user code is awaited).
-const __mount = document.getElementById('root')
+let __userOk = true
 try {
-  if (typeof App === 'function') {
-    __createRoot(__mount).render(__React.createElement(App))
-  } else {
-    __mount.textContent = 'Define a function called App. Example: function App() { return <h1>hi</h1> }'
-    __mount.style.color = '#888'
-    __mount.style.fontSize = '12px'
-  }
+${compiled}
 } catch (err) {
-  const pre = document.createElement('pre')
-  pre.className = '__err'
-  pre.textContent = String(err && err.stack ? err.stack : err)
-  document.body.insertBefore(pre, document.getElementById('root'))
+  __userOk = false
+  __showError(err)
 }
+
+if (__userOk) {
+  const __mount = document.getElementById('root')
+  try {
+    if (typeof App === 'function') {
+      __mount.innerHTML = ''
+      __createRoot(__mount).render(__React.createElement(App))
+    } else {
+      __mount.innerHTML = '<div class="__hint">No App component defined. Try: <code>function App() { return &lt;h1&gt;hi&lt;/h1&gt; }</code></div>'
+    }
+  } catch (err) {
+    __showError(err)
+  }
+}
+
+// Tell the parent we're done booting.
+try { parent.postMessage({ __jsxIframeReady: true }, '*') } catch (_) {}
 </script>
 </body>
 </html>`
 }
 
+interface JsxIframeReadyMessage {
+  __jsxIframeReady: boolean
+}
+
 export function JsxOutput({ compiledCode, error, height = 320 }: Props) {
   const srcDoc = useMemo(() => {
     const snapBytes = bus.snapshotBytes()
-    if (error && !compiledCode) {
-      return buildSrcDoc('', error, snapBytes)
-    }
+    if (error && !compiledCode) return buildSrcDoc('', error, snapBytes)
     return buildSrcDoc(compiledCode ?? '', null, snapBytes)
   }, [compiledCode, error])
 
+  const [ready, setReady] = useState(false)
+  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+
+  // Reset when srcDoc changes (re-run). The iframe will reload.
+  useEffect(() => {
+    setReady(false)
+  }, [srcDoc])
+
+  // Listen for the iframe's "ready" post-message — fires after user code has
+  // mounted (or errored). More accurate than iframe.onLoad for module scripts.
+  useEffect(() => {
+    const handler = (e: MessageEvent<JsxIframeReadyMessage>) => {
+      if (
+        e.source === iframeRef.current?.contentWindow &&
+        e.data &&
+        e.data.__jsxIframeReady
+      ) {
+        setReady(true)
+      }
+    }
+    window.addEventListener('message', handler)
+    return () => window.removeEventListener('message', handler)
+  }, [])
+
   return (
-    <iframe
-      title="jsx preview"
-      sandbox="allow-scripts allow-same-origin"
-      srcDoc={srcDoc}
-      style={{
-        width: '100%',
-        height,
-        border: 0,
-        display: 'block',
-        background: '#1c1c1c',
-      }}
-    />
+    <div
+      className="jsx-iframe-wrap"
+      style={{ position: 'relative', minHeight: height }}
+    >
+      <iframe
+        ref={iframeRef}
+        title="jsx preview"
+        sandbox="allow-scripts allow-same-origin"
+        srcDoc={srcDoc}
+        onLoad={() => {
+          // Fallback: some browsers fire load before module scripts resolve.
+          // The postMessage handler above is the primary readiness signal;
+          // this guards against environments where postMessage is blocked.
+          setTimeout(() => setReady((r) => r || false), 3000)
+        }}
+        style={{
+          width: '100%',
+          height,
+          border: 0,
+          display: 'block',
+          background: '#1c1c1c',
+        }}
+      />
+      {!ready && (
+        <div
+          className="jsx-iframe-overlay"
+          aria-live="polite"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'flex-start',
+            padding: '14px 12px',
+            background:
+              'linear-gradient(180deg, rgba(28,28,28,0.85) 0%, rgba(28,28,28,0.55) 100%)',
+            color: '#9e9e9e',
+            fontSize: 12,
+            gap: 10,
+            pointerEvents: 'none',
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              border: '2px solid rgba(255,255,255,0.2)',
+              borderTopColor: '#689af2',
+              animation: 'spin 0.7s linear infinite',
+              display: 'inline-block',
+            }}
+          />
+          <span>Booting preview · fetching React + recharts (esm.sh)…</span>
+        </div>
+      )}
+    </div>
   )
 }

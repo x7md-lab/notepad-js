@@ -12,15 +12,35 @@ const BUNDLES: duckdb.DuckDBBundles = {
 let dbPromise: Promise<duckdb.AsyncDuckDB> | null = null
 let conn: duckdb.AsyncDuckDBConnection | null = null
 
+export type DuckDBStatus = 'idle' | 'loading' | 'ready' | 'error'
+let status: DuckDBStatus = 'idle'
+
+export function getDuckDBStatus(): DuckDBStatus {
+  return status
+}
+
+/** True only when DuckDB wasm + worker are fully booted. */
+export function isDuckDBReady(): boolean {
+  return status === 'ready'
+}
+
 async function getDb(): Promise<duckdb.AsyncDuckDB> {
   if (dbPromise) return dbPromise
+  status = 'loading'
   dbPromise = (async () => {
-    const bundle = await duckdb.selectBundle(BUNDLES)
-    const worker = new Worker(bundle.mainWorker!, { type: 'module' })
-    const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING)
-    const db = new duckdb.AsyncDuckDB(logger, worker)
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker)
-    return db
+    try {
+      const bundle = await duckdb.selectBundle(BUNDLES)
+      const worker = new Worker(bundle.mainWorker!, { type: 'module' })
+      const logger = new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING)
+      const db = new duckdb.AsyncDuckDB(logger, worker)
+      await db.instantiate(bundle.mainModule, bundle.pthreadWorker)
+      status = 'ready'
+      return db
+    } catch (err) {
+      status = 'error'
+      dbPromise = null
+      throw err
+    }
   })()
   return dbPromise
 }

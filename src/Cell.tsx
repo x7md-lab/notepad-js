@@ -4,7 +4,8 @@ import { CodeEditor } from './CodeEditor'
 import { kernel, type Sink } from './kernel'
 import { CELL_TYPES, type CellType } from './cellType'
 import { runSql } from './sqlRunner'
-import { compileJsx } from './jsx'
+import { compileJsx, isJsxReady } from './jsx'
+import { isDuckDBReady } from './duckdb'
 import { JsxOutput } from './JsxOutput'
 import { bus } from './bus'
 import { parsePolymath, type Block } from './polymath'
@@ -320,11 +321,14 @@ export function Cell({
       push(line)
     }
 
+    const dim = (s: string) => sinkRef.current.push(`\x1b[2m· ${s}\x1b[0m\r\n`)
+
     const runBlock = async (block: Block, idx: number, total: number) => {
       const head = `\x1b[36m── [${idx + 1}/${total}] ${block.lang}${block.name ? ' ' + block.name : ''} ──\x1b[0m`
       sinkRef.current.push(head + '\r\n')
 
       if (block.lang === 'sql') {
+        if (!isDuckDBReady()) dim('loading DuckDB wasm (~9 MB gzip)…')
         const res = await runSql(block.body)
         sinkRef.current.push(lf(res.text) + '\r\n')
         sinkRef.current.push(
@@ -334,6 +338,7 @@ export function Cell({
         bus.send(topic, res.rows)
         push(`\x1b[2m· bus.send('${topic}', <${res.rowCount} rows>)\x1b[0m`)
       } else if (block.lang === 'js') {
+        if (kernel.getStatus() === 'idle') dim('loading QuickJS sandbox…')
         const wrapped = wrapJsForBus(block.body, bus.snapshot())
         const { result } = await kernel.runCell(wrapped, {
           stdout: busStdout,
@@ -343,6 +348,7 @@ export function Cell({
           throw new Error(result.error ?? 'js block failed')
         }
       } else if (block.lang === 'jsx') {
+        if (!isJsxReady()) dim('loading SWC wasm (~4 MB gzip)…')
         const compiled = await compileJsx(block.body)
         setJsxCompiled(compiled)
         setJsxError(null)
@@ -383,6 +389,11 @@ export function Cell({
         })
       } else if (type === 'jsx') {
         setJsxError(null)
+        if (!isJsxReady()) {
+          sinkRef.current.push(
+            '\x1b[2m· loading SWC wasm (~4 MB gzip)…\x1b[0m\r\n',
+          )
+        }
         try {
           const compiled = await compileJsx(body)
           setJsxCompiled(compiled)
